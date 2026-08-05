@@ -1,8 +1,49 @@
 package com.dfn.fireballpoc.geometry
 
+import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+
+/**
+ * Which physical axis of the phone is treated as the "boresight" (the direction being aimed).
+ * [CAMERA_BACK] is the original convention (aim like taking a photo). [LONG_EDGE] uses the top
+ * edge of the phone instead, for taping/mounting the phone alongside another instrument (a
+ * telescope, antenna, etc.) whose own boresight runs along that edge.
+ */
+enum class PointingMode { CAMERA_BACK, LONG_EDGE }
+
+/** Forward/up/right unit vectors in the device's own local axes (X=right, Y=top edge, Z=toward user's face). */
+private data class AxisBasis(
+    val forward: Triple<Double, Double, Double>,
+    val up: Triple<Double, Double, Double>,
+    val right: Triple<Double, Double, Double>
+)
+
+/**
+ * Basis per mode, chosen to keep a consistent right-handed "screen" convention (right x up =
+ * -forward, matching a standard camera view frame) in both cases:
+ * - CAMERA_BACK: forward = -Z (back camera), up = +Y (top edge), right = +X. This is the original,
+ *   already-validated convention - held like a camera, screen facing the user.
+ * - LONG_EDGE: forward = +Y (top edge), up = +Z (out of the screen), right = +X. Physically: phone
+ *   held roughly flat with the top edge pointing at the target and the screen facing upward so it
+ *   can still be read - e.g. taped along the top of a telescope tube.
+ */
+private fun basisFor(mode: PointingMode): AxisBasis = when (mode) {
+    PointingMode.CAMERA_BACK -> AxisBasis(
+        forward = Triple(0.0, 0.0, -1.0),
+        up = Triple(0.0, 1.0, 0.0),
+        right = Triple(1.0, 0.0, 0.0)
+    )
+    PointingMode.LONG_EDGE -> AxisBasis(
+        forward = Triple(0.0, 1.0, 0.0),
+        up = Triple(0.0, 0.0, 1.0),
+        right = Triple(1.0, 0.0, 0.0)
+    )
+}
+
+private fun dot(axis: Triple<Double, Double, Double>, x: Double, y: Double, z: Double): Double =
+    axis.first * x + axis.second * y + axis.third * z
 
 /** A sky direction expressed in the device's own local axes (X=right, Y=top edge, Z=toward user's face). */
 data class DeviceFrame(val x: Double, val y: Double, val z: Double)
@@ -30,31 +71,63 @@ fun worldToDeviceFrame(azDeg: Double, elDeg: Double, rotationMatrix: FloatArray)
 }
 
 /**
- * Perspective-projects into normalized view coordinates for a given half field of view (radians).
- * The boresight is the device's -Z axis (back camera direction), so a point is "in front" when z < 0.
+ * World az/el of the boresight direction for [mode], i.e. "where is the phone currently pointing".
+ * Reads the mode's forward axis out of the world-frame columns of [rotationMatrix] directly
+ * (worldVec = R * deviceForwardAxis), the same technique [OrientationTracker] used to use inline
+ * for the camera axis specifically - generalized here so it's shared and unit-testable.
  */
-fun DeviceFrame.projectNormalized(tanHalfFov: Double): NormalizedPoint {
-    val inFront = z < 0.0
-    val depth = (-z).coerceAtLeast(1e-4)
-    return NormalizedPoint((x / depth) / tanHalfFov, (y / depth) / tanHalfFov, inFront)
+fun pointingAzEl(rotationMatrix: FloatArray, mode: PointingMode): AzEl {
+    val f = basisFor(mode).forward
+    val east = rotationMatrix[0] * f.first + rotationMatrix[1] * f.second + rotationMatrix[2] * f.third
+    val north = rotationMatrix[3] * f.first + rotationMatrix[4] * f.second + rotationMatrix[5] * f.third
+    val up = (rotationMatrix[6] * f.first + rotationMatrix[7] * f.second + rotationMatrix[8] * f.third).coerceIn(-1.0, 1.0)
+
+    val azimuthDeg = (Math.toDegrees(atan2(east, north)) + 360.0) % 360.0
+    val elevationDeg = Math.toDegrees(asin(up))
+    return AzEl(azimuthDeg, elevationDeg)
+}
+
+/**
+ * Perspective-projects into normalized view coordinates for a given half field of view (radians)
+ * and [mode]'s boresight axis. A point is "in front" when its component along the forward axis is
+ * positive.
+ */
+fun DeviceFrame.projectNormalized(tanHalfFov: Double, mode: PointingMode): NormalizedPoint {
+    val basis = basisFor(mode)
+    val forwardComp = dot(basis.forward, x, y, z)
+    val upComp = dot(basis.up, x, y, z)
+    val rightComp = dot(basis.right, x, y, z)
+
+    val inFront = forwardComp > 0.0
+    val depth = forwardComp.coerceAtLeast(1e-4)
+    return NormalizedPoint((rightComp / depth) / tanHalfFov, (upComp / depth) / tanHalfFov, inFront)
 }
 
 /**
  * Direction (clockwise degrees from "up") to rotate the phone to bring this point toward the
  * center of view. Unlike [projectNormalized], this stays well-behaved even when the point is
- * directly behind the device (z >= 0), where the perspective divide is meaningless.
+ * directly behind the device, where the perspective divide is meaningless.
  */
-fun DeviceFrame.arrowAngleDeg(): Double = Math.toDegrees(atan2(x, y))
+fun DeviceFrame.arrowAngleDeg(mode: PointingMode): Double {
+    val basis = basisFor(mode)
+    val rightComp = dot(basis.right, x, y, z)
+    val upComp = dot(basis.up, x, y, z)
+    return Math.toDegrees(atan2(rightComp, upComp))
+}
 
 /**
- * Sign of the world "up" component of the ray through normalized screen point (nx, ny): positive
- * is sky, negative is ground, zero is exactly on the horizon. Because the astronomical horizon is
- * a great circle, and this projection maps great circles to straight lines (a property of
- * gnomonic/perspective projection), this is an exact *linear* function of (nx, ny) - the horizon
- * line is genuinely straight in this view, not just approximately so.
+ * Sign of the world "up" component of the ray cast through normalized screen point (nx, ny) under
+ * [mode]'s basis: positive is sky, negative is ground, zero is exactly on the horizon. Because the
+ * astronomical horizon is a great circle, and this projection maps great circles to straight lines
+ * (a property of gnomonic/perspective projection regardless of which axis is "forward"), this is
+ * an exact *linear* function of (nx, ny) - the horizon line is genuinely straight in this view.
  */
-fun skyValue(nx: Double, ny: Double, rotationMatrix: FloatArray, tanHalfFov: Double): Double {
-    return tanHalfFov * (rotationMatrix[6] * nx + rotationMatrix[7] * ny) - rotationMatrix[8]
+fun skyValue(nx: Double, ny: Double, rotationMatrix: FloatArray, tanHalfFov: Double, mode: PointingMode): Double {
+    val basis = basisFor(mode)
+    val dx = basis.forward.first + tanHalfFov * nx * basis.right.first + tanHalfFov * ny * basis.up.first
+    val dy = basis.forward.second + tanHalfFov * nx * basis.right.second + tanHalfFov * ny * basis.up.second
+    val dz = basis.forward.third + tanHalfFov * nx * basis.right.third + tanHalfFov * ny * basis.up.third
+    return rotationMatrix[6] * dx + rotationMatrix[7] * dy + rotationMatrix[8] * dz
 }
 
 /** A 2D point, used for the generic polygon clip below (kept independent of any UI toolkit's Offset type). */

@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -15,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -22,12 +25,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.dfn.fireballpoc.geometry.PointingMode
 import com.dfn.fireballpoc.geometry.greatCircleDistanceKm
 import com.dfn.fireballpoc.geometry.initialBearingDeg
 import com.dfn.fireballpoc.geometry.isVisible
 import com.dfn.fireballpoc.geometry.latLonAltToEcef
 import com.dfn.fireballpoc.geometry.moonAzEl
 import com.dfn.fireballpoc.geometry.nearestCompassLabel
+import com.dfn.fireballpoc.geometry.pointingAzEl
 import com.dfn.fireballpoc.geometry.sunAzEl
 import com.dfn.fireballpoc.geometry.trackAzEl
 import com.dfn.fireballpoc.model.EventType
@@ -47,7 +52,9 @@ fun HudScreen(
 ) {
     val context = LocalContext.current
     val orientationTracker = remember { OrientationTracker(context) }
-    val deviceOrientation by orientationTracker.orientation.collectAsState()
+    val rotationMatrix by orientationTracker.rotationMatrix.collectAsState()
+    var pointingMode by remember { mutableStateOf(PointingMode.CAMERA_BACK) }
+    val devicePointing = pointingAzEl(rotationMatrix, pointingMode)
 
     DisposableEffect(Unit) {
         orientationTracker.start()
@@ -78,10 +85,16 @@ fun HudScreen(
             style = MaterialTheme.typography.displayMedium,
             fontWeight = FontWeight.Bold
         )
+        Row(
+            modifier = Modifier.padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PointingModeButton("Camera", PointingMode.CAMERA_BACK, pointingMode) { pointingMode = it }
+            PointingModeButton("Long edge", PointingMode.LONG_EDGE, pointingMode) { pointingMode = it }
+        }
         Text(
-            "Aim your phone like you're taking a photo of the target",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 8.dp)
+            aimInstructionText(pointingMode),
+            style = MaterialTheme.typography.titleMedium
         )
 
         when {
@@ -144,8 +157,9 @@ fun HudScreen(
                         trackSamples = trackSamples,
                         currentAzEl = target,
                         startAzEl = startAzEl,
-                        devicePointing = deviceOrientation.pointing,
-                        rotationMatrix = deviceOrientation.rotationMatrix,
+                        devicePointing = devicePointing,
+                        rotationMatrix = rotationMatrix,
+                        pointingMode = pointingMode,
                         sunAzEl = sunPosition,
                         moonAzEl = moonPosition,
                         modifier = Modifier.padding(top = 16.dp)
@@ -161,6 +175,20 @@ fun HudScreen(
             Text("Back to home")
         }
     }
+}
+
+@Composable
+private fun PointingModeButton(label: String, mode: PointingMode, current: PointingMode, onSelect: (PointingMode) -> Unit) {
+    if (mode == current) {
+        Button(onClick = { onSelect(mode) }) { Text(label) }
+    } else {
+        OutlinedButton(onClick = { onSelect(mode) }) { Text(label) }
+    }
+}
+
+private fun aimInstructionText(mode: PointingMode): String = when (mode) {
+    PointingMode.CAMERA_BACK -> "Aim your phone like you're taking a photo of the target"
+    PointingMode.LONG_EDGE -> "Point the long edge of your phone at the target (e.g. taped to another instrument)"
 }
 
 private const val BETTER_VIEW_DISTANCE_KM = 200.0

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.dfn.fireballpoc.geometry.AzEl
 import com.dfn.fireballpoc.geometry.NormalizedPoint
 import com.dfn.fireballpoc.geometry.Point2D
+import com.dfn.fireballpoc.geometry.PointingMode
 import com.dfn.fireballpoc.geometry.arrowAngleDeg
 import com.dfn.fireballpoc.geometry.clipPolygonToHalfPlane
 import com.dfn.fireballpoc.geometry.projectNormalized
@@ -59,10 +60,10 @@ private val COMPASS_LABELS = listOf(
 
 /**
  * Virtual horizon: projects the horizon line, the whole predicted track, and the observer's
- * current pointing direction onto a simulated camera view (no actual camera preview), using the
- * device's full rotation matrix so azimuth, elevation, AND roll are all correctly accounted for.
- * When the event's start point is outside the current field of view, an edge arrow points toward
- * it so the observer can tell they're facing the wrong way.
+ * current pointing direction onto a simulated view centered on [pointingMode]'s boresight axis
+ * (no actual camera preview), using the device's full rotation matrix so azimuth, elevation, AND
+ * roll are all correctly accounted for. When the event's start point is outside the current field
+ * of view, an edge arrow points toward it so the observer can tell they're facing the wrong way.
  */
 @Composable
 fun VirtualHorizonHud(
@@ -71,6 +72,7 @@ fun VirtualHorizonHud(
     startAzEl: AzEl,
     devicePointing: AzEl,
     rotationMatrix: FloatArray,
+    pointingMode: PointingMode,
     sunAzEl: AzEl? = null,
     moonAzEl: AzEl? = null,
     modifier: Modifier = Modifier,
@@ -85,7 +87,7 @@ fun VirtualHorizonHud(
     val tanHalfFov = tan(Math.toRadians(fieldOfViewDeg / 2.0))
 
     val startFrame = worldToDeviceFrame(startAzEl.azimuthDeg, startAzEl.elevationDeg, rotationMatrix)
-    val startNormalized = startFrame.projectNormalized(tanHalfFov)
+    val startNormalized = startFrame.projectNormalized(tanHalfFov, pointingMode)
     val startOnScreen = startNormalized.inFront && abs(startNormalized.x) <= 1.0 && abs(startNormalized.y) <= 1.0
 
     val textMeasurer = rememberTextMeasurer()
@@ -109,7 +111,7 @@ fun VirtualHorizonHud(
 
                 fun pixelOf(np: NormalizedPoint) = Offset(cx + np.x.toFloat() * scale, cy - np.y.toFloat() * scale)
                 fun pixelOf(p: Point2D) = Offset(cx + p.x.toFloat() * scale, cy - p.y.toFloat() * scale)
-                fun project(azEl: AzEl) = worldToDeviceFrame(azEl.azimuthDeg, azEl.elevationDeg, rotationMatrix).projectNormalized(tanHalfFov)
+                fun project(azEl: AzEl) = worldToDeviceFrame(azEl.azimuthDeg, azEl.elevationDeg, rotationMatrix).projectNormalized(tanHalfFov, pointingMode)
 
                 clipRect {
                     // Sky/ground fill: the horizon is a great circle, which this projection maps to a
@@ -118,7 +120,7 @@ fun VirtualHorizonHud(
                     val viewportCorners = listOf(
                         Point2D(-1.0, -1.0), Point2D(1.0, -1.0), Point2D(1.0, 1.0), Point2D(-1.0, 1.0)
                     )
-                    fun skyValueAt(p: Point2D) = skyValue(p.x, p.y, rotationMatrix, tanHalfFov)
+                    fun skyValueAt(p: Point2D) = skyValue(p.x, p.y, rotationMatrix, tanHalfFov, pointingMode)
                     fun fillPolygon(points: List<Point2D>, color: Color) {
                         if (points.isEmpty()) return
                         val path = Path().apply {
@@ -221,7 +223,7 @@ fun VirtualHorizonHud(
             }
 
             if (!startOnScreen) {
-                EdgeArrow(angleDeg = startFrame.arrowAngleDeg(), modifier = Modifier.fillMaxSize())
+                EdgeArrow(angleDeg = startFrame.arrowAngleDeg(pointingMode), modifier = Modifier.fillMaxSize())
             }
         }
 
