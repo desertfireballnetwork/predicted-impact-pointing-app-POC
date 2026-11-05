@@ -52,6 +52,7 @@ private val AlignedColor = Color(0xFF2E7D32)
 private val ReticleColor = Color(0xFFFFFFFF)
 private val SunColor = Color(0xFFFFC107)
 private val MoonColor = Color(0xFFE8E8E0)
+private val GridColor = Color(0x33FFFFFF)
 
 private val COMPASS_LABELS = listOf(
     0.0 to "N", 45.0 to "NE", 90.0 to "E", 135.0 to "SE",
@@ -171,6 +172,32 @@ fun VirtualHorizonHud(
                                 textLayout,
                                 topLeft = Offset(pixel.x - textLayout.size.width / 2f, pixel.y + 10f)
                             )
+                        }
+                    }
+
+                    // Alt-az grid (sky only, 30-degree resolution): faint reference lines, kept
+                    // unobtrusive since the horizon/compass ticks already carry the main cues.
+                    // Azimuth meridians are great circles so they're safe to sample coarsely;
+                    // elevation parallels are small circles (non-linear under this projection) so
+                    // they need finer azimuth sampling, matching the horizon's own step of 5.
+                    for (az in 0 until 360 step 30) {
+                        val meridianPts = (0..90 step 10).map { el -> project(AzEl(az.toDouble(), el.toDouble())) }
+                        for (i in 0 until meridianPts.size - 1) {
+                            val a = meridianPts[i]
+                            val b = meridianPts[i + 1]
+                            if (a.inFront && b.inFront) {
+                                drawLine(GridColor, pixelOf(a), pixelOf(b), strokeWidth = 1.5f)
+                            }
+                        }
+                    }
+                    for (el in listOf(30.0, 60.0)) {
+                        val parallelPts = (0..360 step 5).map { az -> project(AzEl(az.toDouble(), el)) }
+                        for (i in 0 until parallelPts.size - 1) {
+                            val a = parallelPts[i]
+                            val b = parallelPts[i + 1]
+                            if (a.inFront && b.inFront) {
+                                drawLine(GridColor, pixelOf(a), pixelOf(b), strokeWidth = 1.5f)
+                            }
                         }
                     }
 
