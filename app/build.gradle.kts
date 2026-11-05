@@ -11,8 +11,10 @@ android {
         applicationId = "com.dfn.fireballpoc"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        // CI passes these from the git tag / run number (see .github/workflows/release.yml);
+        // local builds fall back to the defaults.
+        versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("appVersionName") as String?) ?: "0.1-dev"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
